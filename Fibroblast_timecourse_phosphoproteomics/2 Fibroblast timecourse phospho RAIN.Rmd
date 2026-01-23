@@ -1,0 +1,117 @@
+---
+title: "2 Fibroblast timecourse phospho RAIN analysis"
+output: 
+---
+
+
+
+```{r}
+# Setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+
+if (!require("BiocManager")) {
+  install.packages("BiocManager", dependencies = TRUE)
+}
+
+if (!require("rain")) {
+  BiocManager::install("rain")
+  library(rain)
+}
+
+# Make a list of all the .txt files in your working directory just so you can see what's going on
+X = list.files(".",".csv")
+X
+```
+
+```{r}
+# read the raw data file
+data_start <- read.csv("Fibroblast_phospho_normalised.csv")
+
+# re-create dataframe with just normalised data - delete first 5 columns
+data_sl <- data_start[,-1:-6]
+
+#Transpose to create the inputs for RAIN.
+RAIN_input <- t(data_sl)
+
+
+#create matrix for RAIN output
+RAIN_output <- as.data.frame(matrix(0,nrow(RAIN_input), 4))
+
+
+#Perform RAIN analysis
+step = 3 #number of hours between timepoints
+period = 24 #specify period length to test for
+rep = 1 #number of biological replicates
+
+# Perform the RAIN analysis here
+# RAIN automatically provides p values corrected for multiple testing using the adaptive Benjamini-Hochberg method
+# See the paper for more details: Thaben and Westermark, 2014, JBR. https://journals.sagepub.com/doi/10.1177/0748730414553029
+
+RAIN_output <- rain(RAIN_input, step, period, nr.series = rep)
+
+
+#Assign gene names to the rows
+names <- data_start[, 1:7]
+
+
+RAIN_output_1 <- cbind(names, RAIN_output)
+colnames(RAIN_output_1) <- c("Phosphosite", "uniprot", "Protein_name", "main_gene", "Sequence.window", "AA", "Position",  "pVal", "phase", "peak.shape", "period")
+
+results<- cbind(RAIN_output_1, data_sl)
+```
+
+```{r}
+#Detrend the data using a 24h moving average
+#Set up useful parameters for detrending
+
+data_sl2 <- t(data_sl)
+
+period = 24     #set period length to detrend
+n_samples = ncol(data_sl2)   #total number of samples
+
+time <- seq(24,69,3)   #list of time-points
+row_days = round(period/(time[2] - time [1]))    #number of rows that correspond to 24 hours (or 1 period length)
+
+detrended_data <- matrix(nrow=length(data_sl2[,1]) - (row_days), ncol=ncol(data_sl2))  #initialise a new matrix for the detrended data, excluding the first and last 12 hours (i.e. half of period)
+colnames(detrended_data) <- colnames(data_sl2)     #set up the column names
+
+#Fill up the matrix with the detrended data
+for (i in 1:n_samples){
+  for (j in 1:length(detrended_data[,1])){
+   detrended_data[j,i] = data_sl2[row_days/2+j,i] - mean(data_sl2[j:(j + row_days),i])
+  }
+}
+
+```
+
+
+```{r}
+#Calculate relative amplitude
+
+#Calculate Means of each column
+Baselines <- as_tibble(colMeans(data_sl2))
+Baselines <- rename(Baselines, Means = value)
+
+#Calculate peak-trough amplitude from detrended data
+
+Amplitude <- as_tibble(apply(detrended_data, 2, function(df) {max(df)-min(df)}))
+
+Relative_amplitude <- as_tibble(Amplitude/Baselines)
+```
+
+```{r}
+all <- cbind(results[1:11], Amplitude, Relative_amplitude, data_sl[,-1])
+colnames(all)[12:13] <- c("Amplitude", "Relative_amplitude")
+
+write.csv(all, "Fibroblast_timecourse_phospho_RAIN_RA.csv", row.names= F)
+```
+
+
