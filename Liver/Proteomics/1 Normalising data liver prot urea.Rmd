@@ -1,0 +1,253 @@
+---
+title: "Sample loading normalisation + IRS"
+output:
+---
+
+```{r}
+#######################################################################################################################################
+# Combined analysis Notebook 1 - DESCRIPTION
+#
+# Here we take the raw data (output of Perseus without NA-filtering).
+# We apply sample loading normalisation to correct for small errors in pipetting - this assumes equal protein was used for
+# all samples submitted for TMT labelling.
+
+# Along the way we plot the data to make sure that we can spot obvious mistakes.
+# Finally, we export the data because this is handy for plotting proteins of interest in other software!
+#
+# INPUTS = raw data from Perseus (.txt)
+# OUTPUTS = normalised data for further analysis (.csv)
+#
+#######################################################################################################################################
+```
+
+```{r}
+#setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+
+if (!require("BiocManager")) {
+  install.packages("BiocManager", dependencies = TRUE)
+}
+
+if (!require("edgeR")) {
+  BiocManager::install("edgeR")
+  library(edgeR)
+}
+
+if (!require("psych")) {
+  install.packages("psych", dependencies = TRUE)
+  library(psych)
+} 
+
+if (!require("purrr")) {
+  install.packages("purrr", dependencies = TRUE)
+  library(purrr)
+} 
+
+# read the raw data file, and ensure "NaN" is interpreted as NA
+data_file <- read.delim("CRM5933_TMT18_urea_prot_m8.txt", na = c("NaN"), stringsAsFactors = F)
+```
+
+
+```{r}
+data_file <- data_file[-1,] # Remove the first row which is just junk
+data_file[, 1:34] <- sapply(data_file[,1:34], as.numeric) # Make the data numeric - in our case the file is organised like this
+
+# Remove rows which contain NaN within the data columns
+data_start <- data_file[rowSums(is.na(data_file[, 1:34])) == 0,]
+
+```
+
+```{r}
+# Clean up majority protein IDs and select reviewed uniprot based on reviewed uniprot list 
+
+uniprot<- read.delim("../../../../../uniprot-proteome_UP000000589+reviewed_yes.tab", na = c("NaN"), stringsAsFactors = F)
+
+#split all majority protein id's into different rows, keep only reviewed uniprot 
+
+data<- data_start %>%
+  mutate(Majority.protein.IDs = strsplit(Majority.protein.IDs, ";")) %>%
+  unnest(cols= Majority.protein.IDs) %>%
+  dplyr::rename(uniprot= Majority.protein.IDs)
+
+names(data_start)
+
+names(data)
+
+
+#identifying reviewed and not reviewed uniprots 
+Reviewed_uniprot<- data[data$uniprot %in% uniprot$Entry ,]
+Not_reviewed_uniprot<- data[!data$id %in% Reviewed_uniprot$id ,]
+
+Reviewed_uniprot<- Reviewed_uniprot %>%
+  distinct(id, .keep_all= TRUE)
+
+Not_reviewed_uniprot<- Not_reviewed_uniprot %>%
+  distinct(id, .keep_all = TRUE)
+
+
+data_uniprot<- rbind(Reviewed_uniprot, Not_reviewed_uniprot)
+
+any(is.na(data_uniprot))
+
+#Now split gene names and keep first gene name 
+
+genes <- vector("list", length(data_uniprot$Gene.names)) # Create empty vector
+for (i in 1:length(data_uniprot$Gene.names)) {
+  genes[i] <- strsplit(data_uniprot$Gene.names[i], ";")
+}
+gene_names <- unlist(lapply(genes, '[', 1))
+data_uniprot$main_gene <- gene_names
+
+data_all<- data_uniprot %>%
+  select(uniprot, main_gene, Protein.names, Pooled_1:U2_V21_2)
+
+data_all<- data_all[rowSums(is.na(data_all)) != ncol(data_all), ]
+```
+
+```{r}
+# Extract data only - in our case this is how the data was organised in the txt file
+data_raw<- data_uniprot[1:34]
+
+
+plotMDS(log2(data_raw), col = rep(c("red", "green"), each = 17), 
+        main = "SL/TMM clusters group by TMT experiment")
+```
+
+```{r}
+#See what raw data looks like 
+
+boxplot(log2(data_raw), col = rep(c("red", "green"), each = 17), 
+        main = "Raw data: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)
+plotDensities(log2(data_raw), col = rep(c('red', 'green'), 17), 
+              main = ' Raw data')
+
+# check the column totals (per channel sums)
+format(round(colSums(data_raw), digits = 0), big.mark = ",")
+```
+
+```{r}
+#Sample loading normalisation + IRS Normalisation (Phil Wilmarth, OHSU PSR Core, January 2018)
+
+# separate the TMT data by experiment
+TMT1 <- data_raw %>%
+  select(Pooled_1, matches("U1"))
+TMT2 <- data_raw %>%
+  select(Pooled_2, matches("U2"))
+
+# figure out the global scaling value
+
+Target1 <- mean(colSums(TMT1))
+Target2 <- mean(colSums(TMT2))
+
+# do the sample loading normalization before the IRS normalization
+# there is a different correction factor for each column
+norm_facs <- Target1 / colSums(TMT1)
+TMT1_sl <- sweep(TMT1, 2, norm_facs, FUN = "*")
+norm_facs <- Target2 / colSums(TMT2)
+TMT2_sl <- sweep(TMT2, 2, norm_facs, FUN = "*")
+
+# make a pre-IRS data frame after sample loading norms
+data_sl<- cbind(TMT1_sl, TMT2_sl)
+
+# see what the SL normalised data look like
+boxplot(log2(data_sl), col = rep(c("red","green" ), each = 17), 
+        main = "INK Sample loading (SL) normalized data: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(data_sl), col = rep(c("red", "green"), 17), main = "SL data")
+
+# check the columnn totals
+format(round(colSums(data_sl), digits = 0), big.mark = ",")
+```
+
+
+```{r}
+# make working frame with row sums from each frame
+
+IRS<- cbind(TMT1_sl[,1], TMT2_sl[,1])
+IRS<- as.data.frame(IRS)
+
+colnames(IRS) <- c("mean1", "mean2")
+
+# get the average intensity for each protein
+IRS$average <- apply(IRS, 1, mean)
+
+# compute the scaling factor vectors
+IRS$fac1 <- IRS$average / IRS$mean1
+IRS$fac2 <- IRS$average / IRS$mean2
+
+# make new data frame with normalized data
+IRS_data <- TMT1_sl * IRS$fac1
+IRS_data <- cbind(IRS_data, TMT2_sl * IRS$fac2)
+
+# see what the IRS data look like
+boxplot(log2(IRS_data), col = rep(c("red", "green"), each = 17), 
+        main = "Internal Reference Scaling (IRS) normalized data: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(IRS_data), col = rep(c("red", "green"), 17), main = "IRS data")
+
+# check column totals
+format(round(colSums(IRS_data), digits = 0), big.mark = ",")
+
+```
+
+```{r}
+# see how things cluster now that we have nice boxplots and density plots
+plotMDS(log2(IRS_data), col = rep(c("red", "green"), each = 17), 
+        main = "SL/TMM clusters group by TMT experiment")
+
+```
+
+```{r}
+#Export normalised data of both genotypes
+# Remove pools from the dataframe of IRS-normalised data
+# Add uniprot ID, protein names, gene names
+all_data <- IRS_data %>% dplyr::select(-contains("Pool"))
+all_data <- cbind(data_uniprot$uniprot, data_uniprot$main_gene, data_uniprot$Protein.names, all_data)
+colnames(all_data)[1:3] <- c("uniprot", "main_gene", "protein_name")
+all_data<- all_data[rowSums(is.na(all_data)) != ncol(all_data), ]
+all_data<- na.omit(all_data)
+
+Vehicle_data <- all_data %>%
+  select(-matches("_I")) %>%
+  relocate(U2_V3_1:U2_V3_2, .after = U1_V3_2) %>%
+  relocate(U2_V9_1:U2_V9_2, .after = U1_V9_2) %>%
+  relocate(U2_V15_1:U2_V15_2, .after = U1_V15_2)
+
+colnames(Vehicle_data)[4:19]<- c("V3_1", "V3_2", "V3_3", "V3_4", 
+                                 "V9_1", "V9_2", "V9_3", "V9_4", 
+                                 "V15_1", "V15_2", "V15_3", "V15_4", 
+                                 "V21_1", "V21_2", "V21_3", "V21_4")
+
+INK_data <- all_data %>%
+  select(-matches("_V")) %>%
+  relocate(U2_I3_1:U2_I3_2, .after = U1_I3_2) %>%
+  relocate(U2_I9_1:U2_I9_2, .after = U1_I9_2) %>%
+  relocate(U2_I15_1:U2_I15_2, .after = U1_I15_2)
+
+colnames(INK_data)[4:19]<- c("I3_1", "I3_2", "I3_3", "I3_4", 
+                                 "I9_1", "I9_2", "I9_3", "I9_4", 
+                                 "I15_1", "I15_2", "I15_3", "I15_4", 
+                                 "I21_1", "I21_2", "I21_3", "I21_4")
+
+
+write.csv(all_data, "All_normalised_data_liver_urea.csv", row.names = F)
+write.csv(Vehicle_data, "All_Vehicle_normalised_data_liver_urea.csv", row.names = F)
+write.csv(INK_data, "All_INK_normalised_data_liver_urea.csv", row.names = F) 
+
+```
