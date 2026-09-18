@@ -1,0 +1,124 @@
+---
+title: "BioDare2"
+output: 
+---
+```{r}
+#######################################################################################################################################
+# Here we take the normalised data from Notebook 1 and use the BioDare2 website to calculate rhythmicity, phase and amplitude https://biodare2.ed.ac.uk/
+# We have to format the data correctly for the BioDare2 website:
+    # The easiest way to do it is in Excel. 
+    # Open the .csv file, remove everything apart from the 1st column with identifier (e.g. Phosphosite), and the columns containing the intensity data. Then change the column names to only the timepoint (e.g. 3, 3, 3, 3, 9, etc). Then change those column headers to Number. 
+    # Start a new experiment in BioDare and upload the data
+    # For rhythmicity analysis, there is no concatenation of data. In the "Rhythmicity" tab, I used the default parameters: 
+        #Data window- ignore, i.e. keep as 0 to 0
+        #Input data: no dtr
+        #Test method: BD2 eJTK
+        #Analysis presets: eJTK Classic
+    # For phase analysis, I concatenated the data to make it 2 days with duplicate data. The data was then log2 transformed. For amplitude calculation, data was concantenated but not log2 transformed. For both period and amplitude analysis, in the "Period analysis" tab, I used these parameters:
+        #Data window- ignore, i.e. keep as 0 to 0
+        #Input data: amp&baseline dtr
+        #Expected periods: 23.5-24.5
+        #Analysis method: MFourFit
+
+#Then download the data from each analysis and join it to the normalised data file. 
+# Input and output files for BioDare are saved in the subfolder "biodare_files"
+# INPUTS = analysis .csv files from BioDare2, normalised data .csv files from Notebook 1
+# OUTPUTS = normalised data for further analysis (.csv)
+#
+#######################################################################################################################################
+```
+
+```{r}
+#setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+```
+
+```{r}
+#load the analysis files from BioDare2
+
+Vehicle_rhythmicity<- read.csv("./biodare_files/26213_jobe0dfeb4e.rhythmicity.csv", skip=20, stringsAsFactors = F) %>%
+  dplyr::rename(Phosphosite = Data.Label) %>% #have to skip the first 20 rows as they are not useful
+  select(Phosphosite, JTK.p.BH.Corrected)
+
+Vehicle_phase<- read.csv("./biodare_files/26213_jobbe99a534-fe19-47d8-b1e2-1639b027ccc5.ppa.csv", skip = 11, stringsAsFactors = F) %>%
+  dplyr::rename(Phosphosite = Group.Label) %>%
+  select(Phosphosite, Circ..Phase.To.Zero)
+
+Vehicle_amp<- read.csv("./biodare_files/26213_job5dd32c3b-874c-4e13-80d7-11db562bab24.ppa.csv", skip = 11, stringsAsFactors = F)%>%
+  dplyr::rename(Phosphosite = Group.Label) %>%
+  select(Phosphosite, Amplitude)
+
+INK_rhythmicity<- read.csv("./biodare_files/26213_job9a9b17a8.rhythmicity.csv", skip=20, stringsAsFactors = F) %>%
+  dplyr::rename(Phosphosite = Data.Label) %>%
+  select(Phosphosite, JTK.p.BH.Corrected)
+
+INK_phase<- read.csv("./biodare_files/26213_jobb6a703e1-9597-4c28-a09d-5f5c458ab35b.ppa.csv", skip = 11, stringsAsFactors = F)%>%
+  dplyr::rename(Phosphosite = Group.Label)%>%
+  select(Phosphosite, Circ..Phase.To.Zero)
+
+INK_amp<- read.csv("./biodare_files/26213_jobaeb9f957-6e92-49d1-8f1c-3f5ff36874c3.ppa.csv", skip = 11, stringsAsFactors = F)%>%
+  dplyr::rename(Phosphosite = Group.Label)%>%
+  select(Phosphosite, Amplitude)
+
+
+#load the normalised .csv files from Notebook 1
+Vehicle_raw<- read.csv("All_phospho_Vehicle_normalised_data_brain_urea.csv", stringsAsFactors = F)
+INK_raw<- read.csv("All_phospho_INK_normalised_data_brain_urea.csv", stringsAsFactors = F)
+```
+
+
+```{r}
+#join normalised data to BioDare outputs 
+
+Vehicle<- left_join(Vehicle_raw, Vehicle_rhythmicity, by = "Phosphosite")%>%
+  dplyr::select(where(~!all(is.na(.x)))) %>%
+  left_join(Vehicle_phase, by = "Phosphosite")%>%
+  left_join(Vehicle_amp, by = "Phosphosite") %>%
+  rename(pval = JTK.p.BH.Corrected,
+         Phase = Circ..Phase.To.Zero)
+
+Vehicle_rhythmic<- Vehicle %>%
+  filter(pval <= 0.05) #1989
+
+Vehicle_notrhythmic<- Vehicle %>%
+  filter(pval >= 0.05) #4890
+
+nrow(Vehicle_rhythmic)/ nrow(Vehicle) *100 #29%
+
+#export data
+write.csv(Vehicle_rhythmic, "Vehicle_phospho_brain_urea_Biodare2_eJTK_rhythmic.csv", row.names = F)
+write.csv(Vehicle_notrhythmic, "Vehicle_phospho_brain_urea_Biodare2_eJTK_notrhythmic.csv", row.names = F)
+write.csv(Vehicle, "Vehicle_phospho_brain_urea_Biodare2_eJTK_all.csv", row.names = F)
+```
+
+```{r}
+#join normalised data to BioDare outputs 
+INK<- left_join(INK_raw, INK_rhythmicity, by = "Phosphosite")%>%
+  dplyr::select(where(~!all(is.na(.x)))) %>%
+  left_join(INK_phase, by = "Phosphosite")%>%
+  left_join(INK_amp, by = "Phosphosite") %>%
+  rename(pval = JTK.p.BH.Corrected,
+         Phase = Circ..Phase.To.Zero)
+
+INK_rhythmic<- INK %>%
+  filter(pval <= 0.05) #93
+
+INK_notrhythmic<- INK %>%
+  filter(pval >= 0.05) #6705
+
+nrow(INK_rhythmic)/ nrow(INK) *100 #1%
+
+#export data
+write.csv(INK_rhythmic, "INK_phospho_brain_urea_Biodare2_eJTK_rhythmic.csv", row.names = F)
+write.csv(INK_notrhythmic, "INK_phospho_brain_urea_Biodare2_eJTK_notrhythmic.csv", row.names = F)
+write.csv(INK, "INK_phospho_brain_urea_Biodare2_eJTK_all.csv", row.names = F)
+```
+
