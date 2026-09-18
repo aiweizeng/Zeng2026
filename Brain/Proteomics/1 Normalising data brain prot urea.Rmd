@@ -1,0 +1,361 @@
+---
+title: "Sample loading normalisation + IRS"
+output:
+---
+
+```{r}
+#######################################################################################################################################
+# Combined analysis Notebook 1 - DESCRIPTION
+#
+# Here we take the raw data (output of Perseus without NA-filtering).
+# We apply sample loading normalisation to correct for small errors in pipetting - this assumes equal protein was used for
+# all samples submitted for TMT labelling.
+
+# Along the way we plot the data to make sure that we can spot obvious mistakes.
+# Finally, we export the data because this is handy for plotting proteins of interest in other software!
+#
+# INPUTS = raw data from Perseus (.txt)
+# OUTPUTS = normalised data for further analysis (.csv)
+#
+#######################################################################################################################################
+```
+
+```{r}
+#setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+
+if (!require("BiocManager")) {
+  install.packages("BiocManager", dependencies = TRUE)
+}
+
+if (!require("edgeR")) {
+  BiocManager::install("edgeR")
+  library(edgeR)
+}
+
+if (!require("psych")) {
+  install.packages("psych", dependencies = TRUE)
+  library(psych)
+} 
+
+if (!require("purrr")) {
+  install.packages("purrr", dependencies = TRUE)
+  library(purrr)
+} 
+
+# read the raw data file, and ensure "NaN" is interpreted as NA
+vehicle_file<- read.delim("1213914161_TMT18_RTS_Veh_prot_m12.txt", na = c("NaN"), stringsAsFactors = F)#8076
+ink_file<- read.delim("1213915686_TMT18_RTS_InK_prot_m9.txt", na = c("NaN"), stringsAsFactors = F) #7986
+```
+
+
+```{r}
+vehicle_file <- vehicle_file[-1,] # Remove the first row which is just junk
+vehicle_file[, 1:18] <- sapply(vehicle_file[,1:18], as.numeric) # Make the vehicle numeric - in our case the file is organised like this
+
+# Remove rows which contain NaN within the vehicle columns
+vehicle_start <- vehicle_file[rowSums(is.na(vehicle_file[, 1:18])) == 0,]
+
+# Clean up majority protein IDs and select reviewed uniprot based on reviewed uniprot list 
+
+uniprot<- read.delim("../../../../../uniprot-proteome_UP000000589+reviewed_yes.tab", na = c("NaN"), stringsAsFactors = F)
+
+
+#split all majority protein id's into different rows, keep only reviewed uniprot 
+
+vehicle<- vehicle_start %>%
+  mutate(Majority.protein.IDs = strsplit(Majority.protein.IDs, ";")) %>%
+  unnest(cols= Majority.protein.IDs) %>%
+  dplyr::rename(uniprot= Majority.protein.IDs)
+
+names(vehicle_start)
+
+names(vehicle)
+
+#identifying reviewed and not reviewed uniprots 
+Reviewed_uniprot<- vehicle[vehicle$uniprot %in% uniprot$Entry ,]
+Not_reviewed_uniprot<- vehicle[!vehicle$id %in% Reviewed_uniprot$id ,]
+
+Reviewed_uniprot<- Reviewed_uniprot %>%
+  distinct(id, .keep_all= TRUE)
+
+Not_reviewed_uniprot<- Not_reviewed_uniprot %>%
+  distinct(id, .keep_all = TRUE)
+
+
+vehicle_uniprot<- rbind(Reviewed_uniprot, Not_reviewed_uniprot)
+
+any(is.na(vehicle_uniprot))
+
+#Now split gene names and keep first gene name 
+
+genes <- vector("list", length(vehicle_uniprot$Gene.names)) # Create empty vector
+for (i in 1:length(vehicle_uniprot$Gene.names)) {
+  genes[i] <- strsplit(vehicle_uniprot$Gene.names[i], ";")
+}
+gene_names <- unlist(lapply(genes, '[', 1))
+vehicle_uniprot$main_gene <- gene_names
+```
+
+
+```{r}
+ink_file <- ink_file[-1,] # Remove the first row which is just junk
+ink_file[, 1:18] <- sapply(ink_file[,1:18], as.numeric) # Make the ink numeric - in our case the file is organised like this
+
+# Remove rows which contain NaN within the ink columns
+ink_start <- ink_file[rowSums(is.na(ink_file[, 1:18])) == 0,]
+
+# Clean up majority protein IDs and select reviewed uniprot based on reviewed uniprot list 
+
+
+ink<- ink_start %>%
+  mutate(Majority.protein.IDs = strsplit(Majority.protein.IDs, ";")) %>%
+  unnest(cols= Majority.protein.IDs) %>%
+  dplyr::rename(uniprot= Majority.protein.IDs)
+
+names(ink_start)
+
+names(ink)
+
+#identifying reviewed and not reviewed uniprots 
+Reviewed_uniprot<- ink[ink$uniprot %in% uniprot$Entry ,]
+Not_reviewed_uniprot<- ink[!ink$id %in% Reviewed_uniprot$id ,]
+
+Reviewed_uniprot<- Reviewed_uniprot %>%
+  distinct(id, .keep_all= TRUE)
+
+Not_reviewed_uniprot<- Not_reviewed_uniprot %>%
+  distinct(id, .keep_all = TRUE)
+
+
+ink_uniprot<- rbind(Reviewed_uniprot, Not_reviewed_uniprot)
+
+any(is.na(ink_uniprot))
+
+#Now split gene names and keep first gene name 
+
+genes <- vector("list", length(ink_uniprot$Gene.names)) # Create empty vector
+for (i in 1:length(ink_uniprot$Gene.names)) {
+  genes[i] <- strsplit(ink_uniprot$Gene.names[i], ";")
+}
+gene_names <- unlist(lapply(genes, '[', 1))
+ink_uniprot$main_gene <- gene_names
+```
+
+
+```{r}
+#remove proteins not in both
+
+both<- intersect(vehicle_uniprot$uniprot, ink_uniprot$uniprot) #6427- maybe losing too many? 
+
+vehicle_uniprot2<- vehicle_uniprot[which(vehicle_uniprot$uniprot %in% both),] %>%
+  arrange(uniprot)
+ink_uniprot2<- ink_uniprot[which(ink_uniprot$uniprot %in% both),]%>%
+  arrange(uniprot)
+```
+
+
+```{r}
+vehicle_raw<- vehicle_uniprot2[1:18]
+
+plotMDS(log2(vehicle_raw), col = rep(c("red", "green"), each = 1), 
+        main = "SL/TMM clusters group by TMT experiment")
+
+
+#See what raw vehicle looks like 
+
+boxplot(log2(vehicle_raw), col = rep(c("red", "green"), each = 17), 
+        main = "Raw vehicle: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)
+plotDensities(log2(vehicle_raw), col = rep(c('red', 'green'), 17), 
+              main = ' Raw vehicle')
+
+# check the column totals (per channel sums)
+format(round(colSums(vehicle_raw), digits = 0), big.mark = ",")
+```
+
+
+
+```{r}
+ink_raw<- ink_uniprot2[1:18]
+
+
+plotMDS(log2(ink_raw), col = rep(c("red", "green"), each = 1), 
+        main = "SL/TMM clusters group by TMT experiment")
+
+
+#See what raw ink looks like 
+
+boxplot(log2(ink_raw), col = rep(c("red", "green"), each = 17), 
+        main = "Raw ink: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)
+plotDensities(log2(ink_raw), col = rep(c('red', 'green'), 17), 
+              main = ' Raw ink')
+
+# check the column totals (per channel sums)
+format(round(colSums(ink_raw), digits = 0), big.mark = ",")
+```
+
+```{r}
+#Sample loading normalisation + IRS Normalisation (Phil Wilmarth, OHSU PSR Core, January 2018)
+
+vehicle_target <- mean(colSums(vehicle_raw))
+
+# do the sample loading normalization before the IRS normalization
+# there is a different correction factor for each column
+norm_facs <- vehicle_target / colSums(vehicle_raw)
+vehicle_sl <- sweep(vehicle_raw, 2, norm_facs, FUN = "*")
+
+
+# see what the SL normalised vehicle look like
+boxplot(log2(vehicle_sl), col = rep(c("red","green" ), each = 17), 
+        main = "Sample loading (SL) normalized vehicle: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(vehicle_sl), col = rep(c("red", "green"), 17), main = "SL vehicle")
+
+# check the columnn totals
+format(round(colSums(vehicle_sl), digits = 0), big.mark = ",")
+```
+
+```{r}
+#Sample loading normalisation + IRS Normalisation (Phil Wilmarth, OHSU PSR Core, January 2018)
+
+ink_target <- mean(colSums(ink_raw))
+
+# do the sample loading normalization before the IRS normalization
+# there is a different correction factor for each column
+norm_facs <- ink_target / colSums(ink_raw)
+ink_sl <- sweep(ink_raw, 2, norm_facs, FUN = "*")
+
+
+# see what the SL normalised ink look like
+boxplot(log2(ink_sl), col = rep(c("red","green" ), each = 17), 
+        main = "Sample loading (SL) normalized ink: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(ink_sl), col = rep(c("red", "green"), 17), main = "SL ink")
+
+# check the columnn totals
+format(round(colSums(ink_sl), digits = 0), big.mark = ",")
+```
+
+
+```{r}
+# make a pre-IRS data frame after sample loading norms
+data_sl<- cbind(vehicle_sl, ink_sl)
+
+# see what the SL normalised data look like
+boxplot(log2(data_sl), col = rep(c("red","green" ), each = 18), 
+        main = "INK Sample loading (SL) normalized data: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(data_sl), col = rep(c("red", "green"), 17), main = "SL data")
+
+# check the columnn totals
+format(round(colSums(data_sl), digits = 0), big.mark = ",")
+```
+
+```{r}
+# make working frame with row sums from each frame
+#take mean of pools
+vehicle_pool_mean<- vehicle_sl %>%
+  select(VP1, VP2) %>% 
+  rowwise() %>%
+  mutate(mean= mean(c(VP1, VP2))) %>%
+  select(mean)
+
+ink_pool_mean<- ink_sl %>%
+  select(Ink_P1, Ink_P2) %>% 
+  rowwise() %>%
+  mutate(mean= mean(c(Ink_P1, Ink_P2))) %>%
+  select(mean)
+
+
+IRS<- cbind(vehicle_pool_mean, ink_pool_mean)
+IRS<- as.data.frame(IRS)
+
+colnames(IRS) <- c("mean1", "mean2")
+
+# get the average intensity for each protein
+IRS$average <- apply(IRS, 1, mean)
+
+# compute the scaling factor vectors
+IRS$fac1 <- IRS$average / IRS$mean1
+IRS$fac2 <- IRS$average / IRS$mean2
+
+# make new data frame with normalized data
+IRS_data <- vehicle_sl * IRS$fac1
+IRS_data <- cbind(IRS_data, ink_sl * IRS$fac2)
+```
+
+
+```{r}
+# see what the IRS data look like
+boxplot(log2(IRS_data), col = rep(c("red", "green"), each = 17), 
+        main = "Internal Reference Scaling (IRS) normalized data: \nExp1 (red), Exp2 (green)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(IRS_data), col = rep(c("red", "green"), 17), main = "IRS data")
+
+# check column totals
+format(round(colSums(IRS_data), digits = 0), big.mark = ",")
+
+# see how things cluster now that we have nice boxplots and density plots
+plotMDS(log2(IRS_data), col = rep(c("red", "green"), each = 17), 
+        main = "SL/TMM clusters group by TMT experiment")
+
+```
+```{r}
+#Export normalised data of both genotypes
+# Remove pools from the dataframe of IRS-normalised data
+# Add uniprot ID, protein names, gene names
+all_data <- IRS_data %>% dplyr::select(-contains("P"))
+all_data <- cbind(vehicle_uniprot2$uniprot, vehicle_uniprot2$main_gene, vehicle_uniprot2$Protein.names, all_data)
+colnames(all_data)[1:3] <- c("uniprot", "main_gene", "protein_name")
+all_data<- all_data[rowSums(is.na(all_data)) != ncol(all_data), ]
+#all_data<- na.omit(all_data)
+
+Vehicle_data <- all_data %>%
+  select(-matches("Ink")) %>%
+  select(uniprot:V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16)
+
+colnames(Vehicle_data)[4:19]<- c("V3_1", "V3_2", "V3_3", "V3_4", 
+                                 "V9_1", "V9_2", "V9_3", "V9_4", 
+                                 "V15_1", "V15_2", "V15_3", "V15_4", 
+                                 "V21_1", "V21_2", "V21_3", "V21_4")
+
+INK_data <- all_data %>%
+  select(-matches("V")) %>%
+  select(uniprot:protein_name, Ink_1, Ink_2, Ink_3, Ink_4, Ink_5, Ink_6, Ink_7, Ink_8, Ink_9, Ink_15.1, Ink_11, Ink_12, Ink_13, Ink_14, Ink_15, Ink_16)
+
+colnames(INK_data)[4:19]<- c("I3_1", "I3_2", "I3_3", "I3_4", 
+                                 "I9_1", "I9_2", "I9_3", "I9_4", 
+                                 "I15_1", "I15_2", "I15_3", "I15_4", 
+                                 "I21_1", "I21_2", "I21_3", "I21_4")
+
+all_data2<- cbind(Vehicle_data, INK_data[4:19])
+
+
+write.csv(all_data2, "All_normalised_data_brain_urea.csv", row.names = F)
+write.csv(Vehicle_data, "All_Vehicle_normalised_data_brain_urea.csv", row.names = F)
+write.csv(INK_data, "All_INK_normalised_data_brain_urea.csv", row.names = F) 
+
+```
