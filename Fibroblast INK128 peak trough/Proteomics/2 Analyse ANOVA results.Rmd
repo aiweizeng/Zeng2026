@@ -1,0 +1,64 @@
+---
+title: "Formatting results from ANOVA"
+output: html_notebook
+---
+
+
+```{r}
+#######################################################################################################################################
+# Combined analysis Notebook 2 - DESCRIPTION
+#
+#Data is log2 transformed and then pasted into Graphpad Prism to calculate repeated measures ANOVA
+#Here, we read in the results of carrying out two-way ANOVA with FDR posthoc test in Graphpad Prism
+#
+# INPUTS = normalised data from notebook 1, ANOVA results from Prism
+# OUTPUTS = normalised data for further analysis (.csv)
+#
+#######################################################################################################################################
+```
+
+```{r}
+#setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+
+#devtools::install_github("yanlinlin82/ggvenn")
+#unhash this if it hasn't been installed before
+library("ggvenn")
+```
+
+```{r}
+#read in results from notebook1
+data<- read.csv("All_normalised_data.csv")
+
+#read in results of ANOVA from prism
+vehicle<-read.csv("Vehicle_ANOVA_prism_results_FDR.csv")
+INK<-read.csv("INK_ANOVA_prism_results_FDR.csv")
+```
+
+```{r}
+#join results to table 
+vehicle_pval <- vehicle %>%
+  select(uniprot, q.value) %>%
+  rename(veh_pval = q.value)
+
+INK_pval <- INK %>%
+  select(uniprot, q.value) %>%
+  rename(INK_pval = q.value)
+
+data_pval<- data %>%
+  left_join(vehicle_pval) %>%
+  left_join(INK_pval)
+
+write.csv(data_pval, "All_normalised_data_ANOVA_results.csv", row.names = F)
+```
+
+
+

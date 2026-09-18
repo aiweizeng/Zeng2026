@@ -1,0 +1,175 @@
+---
+title: "Sample loading normalisation + IRS"
+output:
+---
+
+```{r}
+#######################################################################################################################################
+# Combined analysis Notebook 1 - DESCRIPTION
+#
+# Here we take the raw data (output of Perseus without NA-filtering).
+# We apply sample loading normalisation to correct for small errors in pipetting - this assumes equal protein was used for
+# all samples submitted for TMT labelling.
+
+# Along the way we plot the data to make sure that we can spot obvious mistakes.
+# Finally, we export the data because this is handy for plotting proteins of interest in other software!
+#
+# INPUTS = raw data from Perseus (.txt)
+# OUTPUTS = normalised data for further analysis (.csv)
+#
+#######################################################################################################################################
+```
+
+```{r}
+#setup
+
+# Clear your workspace
+rm(list=ls())
+
+# Load useful packages
+if (!require("tidyverse")) {
+  install.packages("tidyverse", dependencies = TRUE)
+  library(tidyverse)
+}
+
+if (!require("BiocManager")) {
+  install.packages("BiocManager", dependencies = TRUE)
+}
+
+if (!require("edgeR")) {
+  BiocManager::install("edgeR")
+  library(edgeR)
+}
+
+if (!require("psych")) {
+  install.packages("psych", dependencies = TRUE)
+  library(psych)
+} 
+
+# read the raw data file, and ensure "NaN" is interpreted as NA
+raw_data <- read.delim("1397695209_Aiwei_TMT16_urea_prot_m10.txt", na = c("NaN"), stringsAsFactors = F)
+data_start<-raw_data
+data_start <- data_start[-1,] # Remove the first row which is just junk
+data_start[, 1:16] <- sapply(data_start[,1:16], as.numeric) # Make the data numeric - in our case the file is organised like this
+
+# Remove rows which contain NaN within the data columns
+data_start <- data_start[rowSums(is.na(data_start[, 1:16])) == 0,]
+```
+
+```{r}
+# Clean up majority protein IDs and select reviewed uniprot based on reviewed uniprot list 
+
+uniprot<- read.delim("../../../uniprot-proteome_UP000000589+reviewed_yes.tab", na = c("NaN"), stringsAsFactors = F)
+
+#split all majority protein id's into different rows, keep only reviewed uniprot 
+
+data<- data_start %>%
+  mutate(Protein.IDs = strsplit(Protein.IDs, ";")) %>%
+  unnest(cols= Protein.IDs)
+
+names(data_start)
+names(data)
+
+#identifying reviewed and not reviewed uniprots 
+Reviewed_uniprot<- data[data$Protein.IDs %in% uniprot$Entry ,]
+Not_reviewed_uniprot<- data[!data$id %in% Reviewed_uniprot$id ,]
+
+Reviewed_uniprot<- Reviewed_uniprot %>%
+  distinct(id, .keep_all= TRUE)
+
+Not_reviewed_uniprot<- Not_reviewed_uniprot %>%
+  distinct(id, .keep_all = TRUE)
+
+data_uniprot<- rbind(Reviewed_uniprot, Not_reviewed_uniprot)
+data_uniprot<- data_uniprot %>%
+  dplyr::rename(uniprot = Protein.IDs) 
+
+
+```
+
+```{r}
+#Now split gene names and keep first gene name 
+
+genes <- vector("list", length(data_uniprot$Gene.names)) # Create empty vector
+for (i in 1:length(data_uniprot$Gene.names)) {
+  genes[i] <- strsplit(data_uniprot$Gene.names[i], ";")
+}
+gene_names <- unlist(lapply(genes, '[', 1))
+data_uniprot$main_gene <- gene_names
+
+data_raw<- data_uniprot[,1:16]
+```
+
+```{r}
+#See what raw data looks like 
+
+boxplot(log2(data_raw), 
+        main = "Raw data",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+
+# can also look at density plots (like a distribution histogram)
+plotDensities(log2(data_raw), 6, 
+              main = 'Raw data')
+
+# check the column totals (per channel sums)
+format(round(colSums(data_raw), digits = 0), big.mark = ",")
+
+# see how things cluster
+plotMDS(log2(data_raw), 
+        main = "SL/TMM clusters group by TMT experiment")
+```
+
+```{r}
+#Sample loading normalisation
+
+target <- mean(colSums(data_raw))
+norm_facs<- target/colSums(data_raw)
+data_sl<- sweep(data_raw, 2, norm_facs, FUN = "*")
+
+# see what the SL normalised data look like
+boxplot(log2(data_sl), 
+        main = "Sample loading (SL)",
+        xlab = 'TMT Sample', ylab = 'log2 of Intensity', notch = TRUE)
+
+# can also look at density plots (like a distribution histogram)    
+plotDensities(log2(data_sl), main = "SL data")
+
+# check the columnn totals
+format(round(colSums(data_sl), digits = 0), big.mark = ",")
+```
+
+```{r}
+# see how things cluster now that we have nice boxplots and density plots
+plotMDS(log2(data_sl), 
+        main = "SL/TMM clusters group by TMT experiment")
+```
+
+```{r}
+#change column names 
+
+# Extract the numeric part of column names
+numeric_part <- as.numeric(gsub("X", "", names(data_sl)))
+
+# Sort column names based on the numeric part
+sorted_column_names <- paste0("X", sort(numeric_part))
+
+data_sl2 <- data_sl %>%
+  select(all_of(sorted_column_names))
+
+
+colnames(data_sl2)[1:16]<- c("V24_1", "V24_2", "V24_3", "V24_4",
+                 "I24_1", "I24_2", "I24_3", "I24_4",
+                 "V36_1", "V36_2", "V36_3", "V36_4",
+                 "I36_1", 'I36_2', "I36_3", "I36_4")
+
+```
+
+```{r}
+# Combine uniprot ID, protein names, gene names, normalised data
+master_list <- cbind(data_uniprot$uniprot, data_uniprot$main_gene,data_uniprot$Protein.names,  data_sl2)
+colnames(master_list)[1:3]<- c("uniprot", "main_gene", "protein_name")
+
+write.csv(master_list, "All_normalised_data.csv", row.names = F)
+```
+
