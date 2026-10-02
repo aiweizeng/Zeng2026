@@ -12,7 +12,7 @@ Fibroblast_timecourse_phosphoproteomics: phosphoproteomics for Fig 1 \
 Each folder contains:\
 .txt files with output from Perseus\
 .Rmd notebooks with analysis \
-.csv or .pdf output from analyses \
+.csv or .pdf output from analyses 
 
 Notebooks must be run in the indicated order within folders but order of running each folder does not matter.
 
