@@ -25,11 +25,11 @@ tibble\
 ggplot2\
 ggrepel\
 purrr\
-psych\
+psych
 
 ### Bioconductor:
 edgeR\
-RAIN\
+RAIN
 
 
 
